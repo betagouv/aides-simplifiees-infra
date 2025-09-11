@@ -12,11 +12,15 @@ services:
     build:
       context: ../aides-simplifiees-app
       dockerfile: Dockerfile
+      target: development  # Utilise le nouveau stage development
     image: aides-simplifiees-app:dev  # Override with local build tag
     environment:
-      # NODE_ENV: development
+      NODE_ENV: development
       LOG_LEVEL: debug
       SESSION_DRIVER: memory
+      # Variables pour améliorer le file watching dans Docker
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
     volumes:
       - ../aides-simplifiees-app:/app
       - /app/node_modules  # Preserve node_modules in container
@@ -47,6 +51,7 @@ services:
     build:
       context: ../aides-simplifiees-app
       dockerfile: Dockerfile
+      target: development  # Utilise le nouveau stage development
     image: aides-simplifiees-app:dev  # Override with local build tag
     environment:
       NODE_ENV: development
