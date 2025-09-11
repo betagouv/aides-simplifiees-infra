@@ -1,0 +1,196 @@
+name: aides-simplifiees-infra
+
+volumes:
+  dbdata:
+  app_logs:
+
+networks:
+  aides-simplifiees-network:
+    driver: bridge
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  admin_password:
+    file: ./secrets/admin_password
+  app_key:
+    file: ./secrets/app_key
+  monitoring_secret:
+    file: ./secrets/monitoring_secret
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - main-app
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aides-simplifiees-network
+
+  main-app:
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      PORT: 3333
+      SESSION_DRIVER: cookie
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: aides-simplifiees
+      DB_DATABASE: aides-simplifiees
+      LEXIMPACT_URL: https://leximpact.aides.beta.numerique.gouv.fr
+      OPENFISCA_URL: http://openfisca:5000/calculate  # Internal Docker network URL
+      ADMIN_LOGIN: ${ADONIS_ADMIN_LOGIN}
+    secrets:
+      - db_password
+      - admin_password
+      - app_key
+      - monitoring_secret
+    command:
+      - sh
+      - -c
+      - |
+        export DB_PASSWORD="$(cat /run/secrets/db_password)"
+        export ADMIN_PASSWORD="$(cat /run/secrets/admin_password)"
+        export APP_KEY="$(cat /run/secrets/app_key)"
+        export MONITORING_SECRET="$(cat /run/secrets/monitoring_secret)"
+        exec node build/bin/server.js
+    env_file: .env
+    init: true
+    expose: 
+      - "3333"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f -H \"x-monitoring-secret: $(cat /run/secrets/monitoring_secret)\" http://localhost:3333/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aides-simplifiees-network
+    depends_on:
+      db:
+        condition: service_healthy
+      openfisca:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    volumes:
+      - app_logs:/app/logs
+
+  openfisca:
+    image: ghcr.io/betagouv/aides-calculatrice-back:latest
+    command: ["dumb-init", "openfisca", "serve", "--country-package", "openfisca_france", "--bind", "0.0.0.0:5000", "--timeout", "120"]
+    expose:
+      - "5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/spec"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aides-simplifiees-network
+    restart: unless-stopped
+    volumes:
+      - app_logs:/app/openfisca_logs
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees
+      POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./database/backups:/backups
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aides-simplifiees"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - aides-simplifiees-network
+
+
+  db-migrate:
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      SESSION_DRIVER: cookie
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: aides-simplifiees
+      DB_DATABASE: aides-simplifiees
+      LEXIMPACT_URL: https://leximpact.aides.beta.numerique.gouv.fr
+      OPENFISCA_URL: http://openfisca:5000/calculate
+      ADMIN_LOGIN: ${ADONIS_ADMIN_LOGIN}
+    secrets:
+      - db_password
+      - app_key
+      - admin_password
+    command: 
+      - sh
+      - -c
+      - |
+        export DB_PASSWORD="$(cat /run/secrets/db_password)"
+        export APP_KEY="$(cat /run/secrets/app_key)"
+        export ADMIN_PASSWORD="$(cat /run/secrets/admin_password)"
+        echo 'Running database migrations...'
+        node build/bin/console migration:run --force
+        echo 'Seeding database...'
+        node build/bin/console db:seed
+        echo 'Database initialization complete!'
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - aides-simplifiees-network
+    restart: "no"  # Only run once
+
+  # Database backup service
+  db-backup:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees
+    secrets:
+      - db_password
+    volumes:
+      - dbdata:/var/lib/postgresql/data:ro
+      - ./database/backups:/backups
+    command: >
+      sh -c "
+      while true; do
+        PGPASSWORD=\"\$(cat /run/secrets/db_password)\" pg_dump -h db -U \$$POSTGRES_USER -d \$$POSTGRES_DB > /backups/backup_\$$(date +%Y%m%d_%H%M%S).sql
+        find /backups -name '*.sql' -mtime +7 -delete
+        sleep 86400
+      done"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aides-simplifiees-network
