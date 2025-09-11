@@ -1,0 +1,44 @@
+services:
+  main-app:
+    extends:
+      file: docker-compose.local.yml
+      service: main-app
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+
+  openfisca:
+    extends:
+      file: docker-compose.local.yml
+      service: openfisca
+
+  leximpact:
+    extends:
+      file: docker-compose.local.yml
+      service: leximpact
+
+  db:
+    extends:
+      file: docker-compose.local.yml
+      service: db
+
+  db-migrate:
+    extends:
+      file: docker-compose.local.yml
+      service: db-migrate
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+    command: ["node", "ace", "migration:run"]
+  
+  db-seed:
+    extends:
+      file: docker-compose.local.yml
+      service: db-seed
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+    command: ["node", "ace", "db:seed"]

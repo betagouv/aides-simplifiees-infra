@@ -1,0 +1,60 @@
+services:
+  main-app:
+    build:
+      context: ../aides-simplifiees-app
+      dockerfile: Dockerfile
+      target: production
+    image: aides-simplifiees-app:local  # Override with local build tag
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: debug
+      SESSION_DRIVER: memory
+    volumes:
+      - ../aides-simplifiees-app:/app
+      - /app/node_modules  # Preserve node_modules in container
+      - /app/build        # Preserve build directory
+    ports:
+      - "8080:3333" # Expose main app on port 8080 for consistency
+      - "9229:9229"  # Node.js debugging port
+
+  openfisca:
+    build:
+      context: ../aides-calculatrice-back
+      dockerfile: Dockerfile
+    image: aides-calculatrice-back:local  # Override with local build tag
+    volumes:
+      - /app/__pycache__  # Preserve Python cache in container
+    ports:
+      - "5001:5000"  # Expose OpenFisca calculation service directly (5001 to avoid macOS AirPlay conflict)
+      - "5678:5678"  # Python debugging port (debugpy)
+
+  leximpact:
+    build:
+      context: ../territoires
+      dockerfile: ../aides-simplifiees-infra/dockerfiles/leximpact.Dockerfile
+      target: production
+    image: leximpact-territoires:local  # Override with local build tag
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    ports:
+      - "3000:3000"  # Expose LexImpact API directly for local access
+
+  db:
+    ports:
+      # Expose Postgres port directly for local access
+      - "5432:5432"
+
+  db-migrate:
+    build:
+      context: ../aides-simplifiees-app
+      dockerfile: Dockerfile
+      target: production
+    image: aides-simplifiees-app:local  # Override with local build tag
+  db-seed:
+    build:
+      context: ../aides-simplifiees-app
+      dockerfile: Dockerfile
+      target: production
+    image: aides-simplifiees-app:local  # Override with local build tag

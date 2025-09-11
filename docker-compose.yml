@@ -1,0 +1,171 @@
+name: aides-simplifiees-infra
+
+volumes:
+  dbdata:
+  app_logs:
+
+networks:
+  aides-simplifiees-network:
+    driver: bridge
+
+services:
+  # AdonisJS main application
+  main-app:
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    init: true
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: info
+      HOST: 0.0.0.0
+      PORT: 3333
+      SESSION_DRIVER: cookie
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: aides-simplifiees
+      DB_DATABASE: aides-simplifiees
+      LEXIMPACT_URL: http://leximpact:3000
+      OPENFISCA_URL: http://openfisca:5000/calculate
+    ports:
+      - "8080:3333"  # Expose main app directly on port 8080
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f -H \"x-monitoring-secret: ${MONITORING_SECRET}\" http://localhost:3333/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aides-simplifiees-network
+    depends_on:
+      db:
+        condition: service_healthy
+      openfisca:
+        condition: service_healthy
+      leximpact:
+        condition: service_healthy
+      db-seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    volumes:
+      - app_logs:/app/logs
+
+  # OpenFisca calculation engine
+  openfisca:
+    image: ghcr.io/betagouv/aides-calculatrice-back:latest
+    command: ["openfisca", "serve", "--country-package", "openfisca_france", "--bind", "0.0.0.0:5000", "--timeout", "120"]
+    init: true
+    ports:
+      - "5001:5000"  # Expose OpenFisca on port 5001 to avoid macOS AirPlay conflict
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/spec')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aides-simplifiees-network
+    restart: unless-stopped
+    volumes:
+      - app_logs:/app/openfisca_logs
+
+  # LexImpact Territoires API (autocomplétion communes)
+  leximpact:
+    image: ghcr.io/betagouv/leximpact-territoires:latest
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    expose:
+      - "3000"  # Internal access only in production
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - aides-simplifiees-network
+    restart: unless-stopped
+
+  # PostgreSQL database
+  db:
+    image: postgres:17-alpine
+    env_file: .env
+    environment:
+      POSTGRES_USER: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees
+      POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./database/backups:/backups
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aides-simplifiees"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - aides-simplifiees-network
+
+  # Database migration service - runs once to set up schema
+  db-migrate:
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    env_file: .env
+    command: ["node", "build/bin/console", "migration:run", "--force"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - aides-simplifiees-network
+    restart: "no"  # Only run once
+
+  # Database seeding service - runs once to populate initial data
+  db-seed:
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    env_file: .env
+    command: ["node", "build/bin/console", "db:seed"]
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    networks:
+      - aides-simplifiees-network
+    restart: "no"  # Only run once
+
+  # Automated database backup service
+  # Creates daily backups and retains them for 7 days
+  db-backup:
+    image: postgres:17-alpine
+    env_file: .env
+    environment:
+      POSTGRES_USER: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes:
+      - dbdata:/var/lib/postgresql/data:ro
+      - ./database/backups:/backups
+    command: >
+      sh -c "
+        echo 'Starting automated backup service...'
+        while true; do
+          echo 'Creating database backup...'
+          pg_dump -h db -U \$$POSTGRES_USER -d \$$POSTGRES_DB > /backups/backup_\$$(date +%Y%m%d_%H%M%S).sql
+          if [ \$$? -eq 0 ]; then
+            echo 'Backup created successfully'
+          else
+            echo 'Backup failed'
+          fi
+          echo 'Cleaning old backups (>7 days)...'
+          find /backups -name '*.sql' -mtime +7 -delete
+          echo 'Next backup in 24 hours...'
+          sleep 86400
+        done
+      "
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aides-simplifiees-network

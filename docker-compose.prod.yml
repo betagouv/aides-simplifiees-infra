@@ -1,0 +1,136 @@
+name: aides-simplifiees-infra
+
+volumes:
+  dbdata:
+    driver: local
+  app_logs:
+    driver: local
+
+services:
+  main-app:
+    # Production image pinning
+    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    # Expose port 8080 - single instance for external access
+    ports: !override
+      - "8080:3333"
+    # Production resources - single instance with more resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2.0'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '1.0'
+    #       memory: 1G
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  openfisca:
+    # Production image pinning
+    image: ghcr.io/betagouv/aides-calculatrice-back:${OPENFISCA_TAG:-main}
+    # No external port exposure in production - replicas cannot share ports
+    ports: !override []
+    # Production workers configuration
+    command: ["openfisca", "serve", "--country-package", "openfisca_france", "--bind", "0.0.0.0:5000", "--timeout", "120", "--workers", "2"]
+    # Production scaling
+    # deploy:
+    #   replicas: 1
+    #   resources:
+    #     limits:
+    #       cpus: '1.0'
+    #       memory: 1G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/logs
+
+  leximpact:
+    # Production image pinning
+    image: ghcr.io/betagouv/leximpact-territoires:${LEXIMPACT_TAG:-latest}
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Production resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.5'
+    #       memory: 512M
+    # No external port exposure in production
+
+  db:
+    # Production resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1.0' # We keep 1 for now as we test on a small instance
+    #       # cpus: '2.0'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '1.0'
+    #       memory: 1G
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+
+  db-migrate:
+    # Production image pinning
+    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    security_opt:
+      - no-new-privileges:true
+
+  db-seed:
+    # Production image pinning  
+    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    security_opt:
+      - no-new-privileges:true
+
+  # Production-only service
+  db-backup:
+    image: postgres:17-alpine
+    env_file: .env
+    environment:
+      POSTGRES_USER: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes:
+      - dbdata:/var/lib/postgresql/data:ro
+      - ./database/backups:/backups
+    command: >
+      sh -c "
+        echo 'Starting automated backup service...'
+        while true; do
+          echo 'Creating database backup...'
+          pg_dump -h db -U \$$POSTGRES_USER -d \$$POSTGRES_DB > /backups/backup_\$$(date +%Y%m%d_%H%M%S).sql
+          if [ \$$? -eq 0 ]; then
+            echo 'Backup created successfully'
+          else
+            echo 'Backup failed'
+          fi
+          echo 'Cleaning old backups (>7 days)...'
+          find /backups -name '*.sql' -mtime +7 -delete
+          echo 'Next backup in 24 hours...'
+          sleep 86400
+        done
+      "
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aides-simplifiees-network
+    security_opt:
+      - no-new-privileges:true
