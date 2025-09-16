@@ -48,5 +48,14 @@ services:
       context: ../aides-simplifiees-app
       dockerfile: Dockerfile
     image: aides-simplifiees-app:dev  # Override with local build tag
-    environment:
-      NODE_ENV: development
+    # environment:
+      # NODE_ENV: development
+  
+  db-seed:
+    build:
+      context: ../aides-simplifiees-app
+      dockerfile: Dockerfile
+      # target: development  # Utilise le nouveau stage development
+    image: aides-simplifiees-app:dev  # Override with local build tag
+    # environment:
+      # NODE_ENV: development

@@ -16,24 +16,26 @@ else
     endif
 endif
 
-.PHONY: help bootstrap build up logs down clean pull restart status ssl nginx-setup secrets-setup setup
+.PHONY: help bootstrap build up logs down clean pull restart status ssl nginx-setup setup
 
 help: ## Affiche cette aide
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 bootstrap: ## Vérifie la configuration initiale
-	@test -f .env || (echo "Créer le fichier .env (copier depuis .env.template)"; exit 1)
+	@test -f .env || (echo "Créer le fichier .env (copier depuis .env.template et personnaliser)"; exit 1)
 	@echo "Configuration OK"
 
-secrets-setup: ## Génère les fichiers de secrets Docker
-	@echo "Génération des secrets Docker..."
-	@mkdir -p secrets
-	@[ -f secrets/db_password ] || openssl rand -base64 32 > secrets/db_password
-	@[ -f secrets/admin_password ] || openssl rand -base64 32 > secrets/admin_password
-	@[ -f secrets/app_key ] || openssl rand -base64 32 > secrets/app_key
-	@[ -f secrets/monitoring_secret ] || openssl rand -base64 48 > secrets/monitoring_secret
-	@chmod 600 secrets/*
-	@echo "Secrets générés dans ./secrets/ avec permissions 600"
+generate-secrets: ## Génère des valeurs sécurisées pour les secrets dans .env
+	@echo "Génération de valeurs sécurisées pour les secrets..."
+	@DB_PASS=$$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-25); \
+	APP_KEY=$$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-32); \
+	ADMIN_PASS=$$(openssl rand -base64 32 | tr -d '=+/' | cut -c1-20); \
+	MONITOR_SECRET=$$(openssl rand -base64 48 | tr -d '=+/' | cut -c1-40); \
+	echo "Valeurs générées (à copier dans votre .env):"; \
+	echo "DB_PASSWORD=$$DB_PASS"; \
+	echo "APP_KEY=$$APP_KEY"; \
+	echo "ADMIN_PASSWORD=$$ADMIN_PASS"; \
+	echo "MONITORING_SECRET=$$MONITOR_SECRET"
 
 ssl: ## Génère les certificats SSL pour le développement
 	@echo "Génération des certificats SSL..."
@@ -42,7 +44,7 @@ ssl: ## Génère les certificats SSL pour le développement
 nginx-setup: ssl ## Configure nginx avec les certificats SSL
 	@echo "Configuration de nginx terminée"
 
-setup: bootstrap secrets-setup nginx-setup ## Configuration complète (bootstrap + secrets + nginx + SSL)
+setup: bootstrap nginx-setup ## Configuration complète (bootstrap + nginx + SSL)
 
 build: bootstrap ## Build tous les services
 	docker compose --progress=plain -f $(COMPOSE_FILE) build
@@ -69,13 +71,13 @@ status: ## Affiche le statut des services
 	docker compose -f $(COMPOSE_FILE) ps
 
 # Environnements spécifiques
-dev: ENV=dev
-dev: setup build ## Démarre l'environnement de développement
-	docker compose -f $(COMPOSE_FILE) up -d
+dev: ## Démarre l'environnement de développement
+	@$(MAKE) setup build ENV=dev
+	@docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 
-prod: ENV=prod  
-prod: setup build ## Démarre l'environnement de production
-	docker compose -f $(COMPOSE_FILE) up -d
+prod: ## Démarre l'environnement de production
+	@$(MAKE) setup build ENV=prod
+	@docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Commandes de développement
 dev-setup: ## Clone les dépôts pour le développement local
@@ -114,51 +116,18 @@ db-logs: ## Logs de la base de données
 db-shell: ## Shell dans la base de données
 	docker compose -f $(COMPOSE_FILE) exec db psql -U aides-simplifiees -d aides-simplifiees
 
-# Docker secrets management
-secrets-generate: secrets-setup ## Génère tous les secrets (alias pour secrets-setup)
-
-secrets-rotate: ## Régénère tous les secrets (ATTENTION: redémarrage requis)
-	@echo "Ceci va régénérer tous les secrets. Continuer? (y/N)"
-	@read -r response && [ "$$response" = "y" ] || exit 1
-	@rm -f secrets/*
-	@make secrets-setup
-	@echo "Secrets régénérés. Redémarrez les services avec 'make restart'"
-
-secrets-show: ## Affiche les secrets (masqués partiellement)
-	@echo "Secrets actuels:"
-	@echo "db_password: $$(head -c 8 secrets/db_password)..."
-	@echo "admin_password: $$(head -c 8 secrets/admin_password)..."
-	@echo "app_key: $$(head -c 8 secrets/app_key)..."
-	@echo "monitoring_secret: $$(head -c 8 secrets/monitoring_secret)..."
-
-secrets-validate: ## Vérifie que tous les secrets existent
-	@echo "Vérification des secrets..."
-	@test -f secrets/db_password || (echo "secrets/db_password manquant"; exit 1)
-	@test -f secrets/admin_password || (echo "secrets/admin_password manquant"; exit 1)
-	@test -f secrets/app_key || (echo "secrets/app_key manquant"; exit 1)
-	@test -f secrets/monitoring_secret || (echo "secrets/monitoring_secret manquant"; exit 1)
-	@echo "Tous les secrets sont présents"
-
 # Database management commands
 db-setup: ## Configure la base de données (migrations et seeders)
 	@echo "Configuration de la base de données..."
-	@echo "Les migrations et seeders s'exécutent automatiquement via le service db-migrate"
+	@echo "Les migrations et seeders s'exécutent automatiquement via les services db-migrate et db-seed"
 
 db-migrate: ## Execute les migrations uniquement
 	@echo "Exécution des migrations..."
-	@docker compose -f $(COMPOSE_FILE) run --rm db-migrate sh -c "\
-		export DB_PASSWORD=\"\$$(cat /run/secrets/db_password)\" && \
-		export APP_KEY=\"\$$(cat /run/secrets/app_key)\" && \
-		export ADMIN_PASSWORD=\"\$$(cat /run/secrets/admin_password)\" && \
-		node build/bin/console migration:run --force"
+	@docker compose -f $(COMPOSE_FILE) run --rm db-migrate
 
 db-seed: ## Execute les seeders uniquement
 	@echo "Exécution des seeders..."
-	@docker compose -f $(COMPOSE_FILE) run --rm db-migrate sh -c "\
-		export DB_PASSWORD=\"\$$(cat /run/secrets/db_password)\" && \
-		export APP_KEY=\"\$$(cat /run/secrets/app_key)\" && \
-		export ADMIN_PASSWORD=\"\$$(cat /run/secrets/admin_password)\" && \
-		node build/bin/console db:seed"
+	@docker compose -f $(COMPOSE_FILE) run --rm db-seed
 
 db-reset: ## Remet à zéro la base de données (ATTENTION: supprime toutes les données)
 	@echo "Ceci va supprimer toutes les données de la base. Êtes-vous sûr? (y/N)"

@@ -8,17 +8,8 @@ networks:
   aides-simplifiees-network:
     driver: bridge
 
-secrets:
-  db_password:
-    file: ./secrets/db_password
-  admin_password:
-    file: ./secrets/admin_password
-  app_key:
-    file: ./secrets/app_key
-  monitoring_secret:
-    file: ./secrets/monitoring_secret
-
 services:
+  # Reverse proxy for SSL termination and static file serving
   nginx:
     image: nginx:1.25-alpine
     volumes:
@@ -38,8 +29,10 @@ services:
     networks:
       - aides-simplifiees-network
 
+  # AdonisJS main application
   main-app:
     image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    env_file: .env
     environment:
       NODE_ENV: production
       LOG_LEVEL: info
@@ -51,28 +44,11 @@ services:
       DB_USER: aides-simplifiees
       DB_DATABASE: aides-simplifiees
       LEXIMPACT_URL: https://leximpact.aides.beta.numerique.gouv.fr
-      OPENFISCA_URL: http://openfisca:5000/calculate  # Internal Docker network URL
-      ADMIN_LOGIN: ${ADONIS_ADMIN_LOGIN}
-    secrets:
-      - db_password
-      - admin_password
-      - app_key
-      - monitoring_secret
-    command:
-      - sh
-      - -c
-      - |
-        export DB_PASSWORD="$(cat /run/secrets/db_password)"
-        export ADMIN_PASSWORD="$(cat /run/secrets/admin_password)"
-        export APP_KEY="$(cat /run/secrets/app_key)"
-        export MONITORING_SECRET="$(cat /run/secrets/monitoring_secret)"
-        exec node build/bin/server.js
-    env_file: .env
-    init: true
+      OPENFISCA_URL: http://openfisca:5000/calculate
     expose: 
       - "3333"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f -H \"x-monitoring-secret: $(cat /run/secrets/monitoring_secret)\" http://localhost:3333/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f -H \"x-monitoring-secret: ${MONITORING_SECRET}\" http://localhost:3333/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -84,12 +60,13 @@ services:
         condition: service_healthy
       openfisca:
         condition: service_healthy
-      db-migrate:
+      db-seed:
         condition: service_completed_successfully
     restart: unless-stopped
     volumes:
       - app_logs:/app/logs
 
+  # OpenFisca calculation engine
   openfisca:
     image: ghcr.io/betagouv/aides-calculatrice-back:latest
     command: ["dumb-init", "openfisca", "serve", "--country-package", "openfisca_france", "--bind", "0.0.0.0:5000", "--timeout", "120"]
@@ -107,15 +84,15 @@ services:
     volumes:
       - app_logs:/app/openfisca_logs
 
+  # PostgreSQL database
   db:
     image: postgres:17-alpine
+    env_file: .env
     environment:
       POSTGRES_USER: aides-simplifiees
       POSTGRES_DB: aides-simplifiees
       POSTGRES_INITDB_ARGS: --encoding=UTF-8 --lc-collate=C --lc-ctype=C
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-    secrets:
-      - db_password
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - dbdata:/var/lib/postgresql/data
       - ./database/backups:/backups
@@ -130,39 +107,11 @@ services:
     networks:
       - aides-simplifiees-network
 
-
+  # Database migration service - runs once to set up schema
   db-migrate:
     image: ghcr.io/betagouv/aides-simplifiees-app:latest
-    env_file:
-      - .env
-    environment:
-      NODE_ENV: production
-      LOG_LEVEL: info
-      HOST: 0.0.0.0
-      SESSION_DRIVER: cookie
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_USER: aides-simplifiees
-      DB_DATABASE: aides-simplifiees
-      LEXIMPACT_URL: https://leximpact.aides.beta.numerique.gouv.fr
-      OPENFISCA_URL: http://openfisca:5000/calculate
-      ADMIN_LOGIN: ${ADONIS_ADMIN_LOGIN}
-    secrets:
-      - db_password
-      - app_key
-      - admin_password
-    command: 
-      - sh
-      - -c
-      - |
-        export DB_PASSWORD="$(cat /run/secrets/db_password)"
-        export APP_KEY="$(cat /run/secrets/app_key)"
-        export ADMIN_PASSWORD="$(cat /run/secrets/admin_password)"
-        echo 'Running database migrations...'
-        node build/bin/console migration:run --force
-        echo 'Seeding database...'
-        node build/bin/console db:seed
-        echo 'Database initialization complete!'
+    env_file: .env
+    command: ["node", "build/bin/console", "migration:run", "--force"]
     depends_on:
       db:
         condition: service_healthy
@@ -170,24 +119,47 @@ services:
       - aides-simplifiees-network
     restart: "no"  # Only run once
 
-  # Database backup service
+  # Database seeding service - runs once to populate initial data
+  db-seed:
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    env_file: .env
+    command: ["node", "build/bin/console", "db:seed"]
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    networks:
+      - aides-simplifiees-network
+    restart: "no"  # Only run once
+
+  # Automated database backup service
+  # Creates daily backups and retains them for 7 days
   db-backup:
     image: postgres:17-alpine
+    env_file: .env
     environment:
       POSTGRES_USER: aides-simplifiees
       POSTGRES_DB: aides-simplifiees
-    secrets:
-      - db_password
+      PGPASSWORD: ${DB_PASSWORD}
     volumes:
       - dbdata:/var/lib/postgresql/data:ro
       - ./database/backups:/backups
     command: >
       sh -c "
-      while true; do
-        PGPASSWORD=\"\$(cat /run/secrets/db_password)\" pg_dump -h db -U \$$POSTGRES_USER -d \$$POSTGRES_DB > /backups/backup_\$$(date +%Y%m%d_%H%M%S).sql
-        find /backups -name '*.sql' -mtime +7 -delete
-        sleep 86400
-      done"
+        echo 'Starting automated backup service...'
+        while true; do
+          echo 'Creating database backup...'
+          pg_dump -h db -U \$$POSTGRES_USER -d \$$POSTGRES_DB > /backups/backup_\$$(date +%Y%m%d_%H%M%S).sql
+          if [ \$$? -eq 0 ]; then
+            echo 'Backup created successfully'
+          else
+            echo 'Backup failed'
+          fi
+          echo 'Cleaning old backups (>7 days)...'
+          find /backups -name '*.sql' -mtime +7 -delete
+          echo 'Next backup in 24 hours...'
+          sleep 86400
+        done
+      "
     depends_on:
       db:
         condition: service_healthy

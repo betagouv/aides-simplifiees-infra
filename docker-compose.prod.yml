@@ -10,26 +10,20 @@ volumes:
 
 services:
   nginx:
+    # Production-specific nginx configs only
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
-      - ./nginx/logs:/var/log/nginx
+      - ./nginx/logs:/var/log/nginx  # Additional production logging
     security_opt:
       - no-new-privileges:true
 
   main-app:
-    build:
-      context: https://github.com/betagouv/aides-simplifiees-app.git#${MAIN_APP_SHA:-main}:.
-      dockerfile: Dockerfile
-      target: production
+    # Production image pinning
     image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /tmp
+    # Production scaling and resources
     deploy:
-      replicas: 2  # Scale for production
+      replicas: 2
       resources:
         limits:
           cpus: '1.0'
@@ -37,43 +31,44 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
 
   openfisca:
-    build:
-      context: https://github.com/betagouv/aides-calculatrice-back.git#${OPENFISCA_SHA:-main}:.
-      dockerfile: Dockerfile
-      target: production
+    # Production image pinning
     image: ghcr.io/betagouv/aides-calculatrice-back:${OPENFISCA_TAG:-main}
-    expose: 
-      - "5000"  # Correction du port OpenFisca
+    # Production workers configuration
+    command: ["dumb-init", "openfisca", "serve", "--country-package", "openfisca_france", "--bind", "0.0.0.0:5000", "--timeout", "120", "--workers", "2"]
+    # Production environment
+    environment:
+      GUNICORN_WORKERS: 2
+      GUNICORN_WORKER_CLASS: sync
+      GUNICORN_MAX_REQUESTS: 1000
+      GUNICORN_MAX_REQUESTS_JITTER: 100
+    # Production scaling
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    # Production security
     security_opt:
       - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp
       - /app/logs
-    volumes:
-      - app_logs:/app/logs
-    deploy:
-      replicas: 2  # Scale for production
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
 
   db:
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - dbdata:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d:ro
-    security_opt:
-      - no-new-privileges:true
+    # Production resources
     deploy:
       resources:
         limits:
@@ -82,28 +77,55 @@ services:
         reservations:
           cpus: '1.0'
           memory: 1G
+    # Production security
+    security_opt:
+      - no-new-privileges:true
 
-  # Database backup service
+  db-migrate:
+    # Production image pinning
+    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    security_opt:
+      - no-new-privileges:true
+
+  db-seed:
+    # Production image pinning  
+    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    security_opt:
+      - no-new-privileges:true
+
+  # Production-only service
   db-backup:
+    image: postgres:17-alpine
+    env_file: .env
     environment:
-      POSTGRES_USER: ${DB_USER:-aides}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_DATABASE:-aides}
+      POSTGRES_USER: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees
+      PGPASSWORD: ${DB_PASSWORD}
     volumes:
       - dbdata:/var/lib/postgresql/data:ro
       - ./database/backups:/backups
+    command: >
+      sh -c "
+        echo 'Starting automated backup service...'
+        while true; do
+          echo 'Creating database backup...'
+          pg_dump -h db -U \$$POSTGRES_USER -d \$$POSTGRES_DB > /backups/backup_\$$(date +%Y%m%d_%H%M%S).sql
+          if [ \$$? -eq 0 ]; then
+            echo 'Backup created successfully'
+          else
+            echo 'Backup failed'
+          fi
+          echo 'Cleaning old backups (>7 days)...'
+          find /backups -name '*.sql' -mtime +7 -delete
+          echo 'Next backup in 24 hours...'
+          sleep 86400
+        done
+      "
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - aides-simplifiees-network
     security_opt:
       - no-new-privileges:true
-
-  # Database migration service (production)
-  db-migrate:
-    build:
-      context: https://github.com/betagouv/aides-simplifiees-app.git#${MAIN_APP_SHA:-main}:.
-      dockerfile: Dockerfile
-    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
-    environment:
-      NODE_ENV: production
-    security_opt:
-      - no-new-privileges:true
-    restart: "no"  # Only run once

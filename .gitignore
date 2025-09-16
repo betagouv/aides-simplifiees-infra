@@ -44,7 +44,7 @@ node_modules/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variables file (keep .env.example)
+# dotenv environment variables file (keep .env.template)
 # .env
 
 # IDEs and editors
