@@ -76,7 +76,7 @@ dev: ## Démarre l'environnement de développement
 	@docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 
 prod: ## Démarre l'environnement de production
-	@$(MAKE) setup build ENV=prod
+	@$(MAKE) bootstrap build ENV=prod
 	@docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Commandes de développement
