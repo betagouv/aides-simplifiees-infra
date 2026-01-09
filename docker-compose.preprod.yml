@@ -1,0 +1,126 @@
+name: aides-simplifiees-preprod
+
+volumes:
+  dbdata_preprod:
+    driver: local
+  app_logs_preprod:
+    driver: local
+
+services:
+
+  main-app:
+    # Preprod image pinning - use preprod tag
+    image: ghcr.io/betagouv/aides-simplifiees-app:preprod
+    # Use preprod-specific env file
+    env_file: !override .env.preprod
+    # Expose port 8081 for preprod
+    ports: !override
+      - "8081:3333"
+    # Override DB name for preprod
+    environment:
+      DB_DATABASE: aides-simplifiees-preprod
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes: !override
+      - app_logs_preprod:/app/logs
+
+  openfisca:
+    # Preprod image pinning - use latest (same as prod)
+    image: ghcr.io/betagouv/aides-calculatrice-back:latest
+    # No external port exposure in preprod
+    ports: !override []
+    # Preprod workers configuration
+    command: ["openfisca", "serve", "--country-package", "openfisca_france", "--bind", "0.0.0.0:5000", "--timeout", "120", "--workers", "2"]
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/logs
+      - /app/openfisca_logs
+    volumes: !override []
+
+  leximpact:
+    # Preprod image pinning - use latest (same as prod)
+    image: ghcr.io/betagouv/leximpact-territoires:latest
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  db:
+    # Override to create preprod database with separate volume
+    environment:
+      POSTGRES_DB: aides-simplifiees-preprod
+    volumes: !override
+      - dbdata_preprod:/var/lib/postgresql/data
+      - ./database/backups_preprod:/backups
+    # Production security
+    security_opt:
+      - no-new-privileges:true
+
+  db-migrate:
+    # Preprod image pinning - use preprod tag
+    image: ghcr.io/betagouv/aides-simplifiees-app:preprod
+    # Use preprod-specific env file
+    env_file: !override .env.preprod
+    # Override DB name for preprod migrations
+    environment:
+      DB_DATABASE: aides-simplifiees-preprod
+    security_opt:
+      - no-new-privileges:true
+
+  db-seed:
+    # Preprod image pinning - use preprod tag
+    image: ghcr.io/betagouv/aides-simplifiees-app:preprod
+    # Use preprod-specific env file
+    env_file: !override .env.preprod
+    # Override DB name for preprod seeding
+    environment:
+      DB_DATABASE: aides-simplifiees-preprod
+    security_opt:
+      - no-new-privileges:true
+
+  # Preprod backup service
+  db-backup:
+    image: postgres:17-alpine
+    env_file: !override .env.preprod
+    environment:
+      POSTGRES_USER: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees-preprod
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes:
+      - dbdata_preprod:/var/lib/postgresql/data:ro
+      - ./database/backups_preprod:/backups
+    command: >
+      sh -c "
+        echo 'Starting automated backup service...'
+        while true; do
+          echo 'Creating database backup...'
+          pg_dump -h db -U \$$POSTGRES_USER -d \$$POSTGRES_DB > /backups/backup_\$$(date +%Y%m%d_%H%M%S).sql
+          if [ \$$? -eq 0 ]; then
+            echo 'Backup created successfully'
+          else
+            echo 'Backup failed'
+          fi
+          echo 'Cleaning old backups (>7 days)...'
+          find /backups -name '*.sql' -mtime +7 -delete
+          echo 'Next backup in 24 hours...'
+          sleep 86400
+        done
+      "
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aides-simplifiees-network
+    security_opt:
+      - no-new-privileges:true

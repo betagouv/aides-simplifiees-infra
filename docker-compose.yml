@@ -9,6 +9,7 @@ networks:
     driver: bridge
 
 services:
+
   # AdonisJS main application
   main-app:
     image: ghcr.io/betagouv/aides-simplifiees-app:latest
@@ -29,7 +30,7 @@ services:
     ports:
       - "8080:3333"  # Expose main app directly on port 8080
     healthcheck:
-      test: ["CMD-SHELL", "curl -f -H \"x-monitoring-secret: ${MONITORING_SECRET}\" http://localhost:3333/health || exit 1"]
+      test: ["CMD", "node", "-e", "const http = require('http'); const options = { hostname: '127.0.0.1', port: 3333, path: '/health', headers: { 'x-monitoring-secret': process.env.MONITORING_SECRET || '' } }; http.get(options, (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -102,7 +103,7 @@ services:
     expose:
       - "5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aides-simplifiees"]
+      test: ["CMD-SHELL", "pg_isready -U aides-simplifiees -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5

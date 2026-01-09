@@ -1,18 +1,25 @@
-name: aides-simplifiees-infra
+name: aides-simplifiees-prod
 
 volumes:
-  dbdata:
-    driver: local
-  app_logs:
+  dbdata_prod:
+    external: true
+    name: aides-simplifiees-prod_dbdata_prod
+  app_logs_prod:
     driver: local
 
 services:
+
   main-app:
     # Production image pinning
-    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    # Use production-specific env file
+    env_file: !override .env.prod
     # Expose port 8080 - single instance for external access
     ports: !override
       - "8080:3333"
+    # Override DB name for production
+    environment:
+      DB_DATABASE: aides-simplifiees-prod
     # Production resources - single instance with more resources
     # deploy:
     #   resources:
@@ -28,10 +35,12 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes: !override
+      - app_logs_prod:/app/logs
 
   openfisca:
     # Production image pinning
-    image: ghcr.io/betagouv/aides-calculatrice-back:${OPENFISCA_TAG:-main}
+    image: ghcr.io/betagouv/aides-calculatrice-back:latest
     # No external port exposure in production - replicas cannot share ports
     ports: !override []
     # Production workers configuration
@@ -53,10 +62,12 @@ services:
     tmpfs:
       - /tmp
       - /app/logs
+      - /app/openfisca_logs
+    volumes: !override []
 
   leximpact:
     # Production image pinning
-    image: ghcr.io/betagouv/leximpact-territoires:${LEXIMPACT_TAG:-latest}
+    image: ghcr.io/betagouv/leximpact-territoires:latest
     # Production security
     security_opt:
       - no-new-privileges:true
@@ -82,33 +93,49 @@ services:
     #     reservations:
     #       cpus: '1.0'
     #       memory: 1G
+    # Override to create production database with specific name
+    environment:
+      POSTGRES_DB: aides-simplifiees-prod
     # Production security
     security_opt:
       - no-new-privileges:true
+    volumes: !override
+      - dbdata_prod:/var/lib/postgresql/data
+      - ./database/backups_prod:/backups
 
   db-migrate:
     # Production image pinning
-    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    # Use production-specific env file
+    env_file: !override .env.prod
+    # Override DB name for production migrations
+    environment:
+      DB_DATABASE: aides-simplifiees-prod
     security_opt:
       - no-new-privileges:true
 
   db-seed:
     # Production image pinning  
-    image: ghcr.io/betagouv/aides-simplifiees-app:${MAIN_APP_TAG:-main}
+    image: ghcr.io/betagouv/aides-simplifiees-app:latest
+    # Use production-specific env file
+    env_file: !override .env.prod
+    # Override DB name for production seeding
+    environment:
+      DB_DATABASE: aides-simplifiees-prod
     security_opt:
       - no-new-privileges:true
 
   # Production-only service
   db-backup:
     image: postgres:17-alpine
-    env_file: .env
+    env_file: !override .env.prod
     environment:
       POSTGRES_USER: aides-simplifiees
-      POSTGRES_DB: aides-simplifiees
+      POSTGRES_DB: aides-simplifiees-prod
       PGPASSWORD: ${DB_PASSWORD}
     volumes:
-      - dbdata:/var/lib/postgresql/data:ro
-      - ./database/backups:/backups
+      - dbdata_prod:/var/lib/postgresql/data:ro
+      - ./database/backups_prod:/backups
     command: >
       sh -c "
         echo 'Starting automated backup service...'

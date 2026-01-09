@@ -9,6 +9,8 @@ ENV ?= dev
 COMPOSE_FILE := docker-compose.yml
 ifeq ($(ENV),prod)
     COMPOSE_FILE := docker-compose.yml -f docker-compose.prod.yml
+else ifeq ($(ENV),preprod)
+    COMPOSE_FILE := docker-compose.yml -f docker-compose.preprod.yml
 else ifeq ($(ENV),dev)
     COMPOSE_FILE := docker-compose.yml -f docker-compose.dev.yml
 else ifeq ($(ENV),local)
@@ -41,7 +43,7 @@ generate-secrets: ## Génère des valeurs sécurisées pour les secrets dans .en
 	echo "ADMIN_PASSWORD=$$ADMIN_PASS"; \
 	echo "MONITORING_SECRET=$$MONITOR_SECRET"
 
-setup: bootstrap ## Configuration complète (Usage: make setup ENV=dev|local|prod)
+setup: bootstrap ## Configuration complète (Usage: make setup ENV=dev|local|prod|preprod)
 	@echo "Vérification des dépendances (environnement: $(ENV))..."
 	@if [ "$(ENV)" = "prod" ]; then \
 		echo "Mode production: utilisation des images pré-construites"; \
@@ -61,28 +63,28 @@ setup: bootstrap ## Configuration complète (Usage: make setup ENV=dev|local|pro
 		fi; \
 	fi
 
-build: bootstrap ## Build tous les services (Usage: make build ENV=dev|local|prod)
+build: bootstrap ## Build tous les services (Usage: make build ENV=dev|local|prod|preprod)
 	docker compose --progress=plain -f $(COMPOSE_FILE) build
 
-up: bootstrap ## Démarre tous les services (Usage: make up ENV=dev|local|prod)
+up: bootstrap ## Démarre tous les services (Usage: make up ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) up -d
 
-logs: ## Affiche les logs de tous les services (Usage: make logs ENV=dev|local|prod)
+logs: ## Affiche les logs de tous les services (Usage: make logs ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) logs -f --tail=100
 
-down: ## Arrête tous les services (Usage: make down ENV=dev|local|prod)
+down: ## Arrête tous les services (Usage: make down ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) down
 
-clean: ## Arrête et supprime tout (Usage: make clean ENV=dev|local|prod)
+clean: ## Arrête et supprime tout (Usage: make clean ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) down -v --remove-orphans
 	docker system prune -f
 
-pull: ## Met à jour les images de base (Usage: make pull ENV=dev|local|prod)
+pull: ## Met à jour les images de base (Usage: make pull ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) pull
 
-restart: down up ## Redémarre tous les services (Usage: make restart ENV=dev|local|prod)
+restart: down up ## Redémarre tous les services (Usage: make restart ENV=dev|local|prod|preprod)
 
-status: ## Affiche le statut des services (Usage: make status ENV=dev|local|prod)
+status: ## Affiche le statut des services (Usage: make status ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) ps
 
 # Environment-specific build-up commands
@@ -100,6 +102,11 @@ local: ## Démarre l'environnement local (production locale)
 	@$(MAKE) setup ENV=local
 	@docker compose -f docker-compose.yml -f docker-compose.local.yml build
 	@docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+
+preprod: ## Démarre l'environnement de préproduction
+	@$(MAKE) bootstrap
+	@docker compose -f docker-compose.yml -f docker-compose.preprod.yml pull
+	@docker compose -f docker-compose.yml -f docker-compose.preprod.yml up -d
 
 # Commandes de développement
 local-setup: ## Clone les dépôts pour le développement local
@@ -123,71 +130,103 @@ local-setup: ## Clone les dépôts pour le développement local
 	fi
 
 # Commandes spécifiques aux services
-main-app-logs: ## Logs du main-app uniquement (Usage: make main-app-logs ENV=dev|local|prod)
+main-app-logs: ## Logs du main-app uniquement (Usage: make main-app-logs ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) logs -f main-app
 
-openfisca-logs: ## Logs du openfisca uniquement (Usage: make openfisca-logs ENV=dev|local|prod)
+openfisca-logs: ## Logs du openfisca uniquement (Usage: make openfisca-logs ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) logs -f openfisca
 
-leximpact-logs: ## Logs du leximpact uniquement (Usage: make leximpact-logs ENV=dev|local|prod)
+leximpact-logs: ## Logs du leximpact uniquement (Usage: make leximpact-logs ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) logs -f leximpact
 
-db-logs: ## Logs de la base de données (Usage: make db-logs ENV=dev|local|prod)
+db-logs: ## Logs de la base de données (Usage: make db-logs ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) logs -f db
 
-db-shell: ## Shell dans la base de données (Usage: make db-shell ENV=dev|local|prod)
-	docker compose -f $(COMPOSE_FILE) exec db psql -U aides-simplifiees -d aides-simplifiees
+db-shell: ## Shell dans la base de données (Usage: make db-shell ENV=dev|local|prod|preprod)
+	@if [ "$(ENV)" = "preprod" ]; then \
+		docker compose -f docker-compose.yml -f docker-compose.preprod.yml exec db psql -U aides-simplifiees -d aides-simplifiees-preprod; \
+	elif [ "$(ENV)" = "prod" ]; then \
+		docker compose -f docker-compose.yml -f docker-compose.prod.yml exec db psql -U aides-simplifiees -d aides-simplifiees-prod; \
+	elif [ "$(ENV)" = "local" ]; then \
+		docker compose -f docker-compose.yml -f docker-compose.local.yml exec db psql -U aides-simplifiees -d aides-simplifiees-local; \
+	else \
+		docker compose -f $(COMPOSE_FILE) exec db psql -U aides-simplifiees -d aides-simplifiees; \
+	fi
 
 # Database management commands
-db-setup: ## Configure la base de données (Usage: make db-setup ENV=dev|local|prod)
+db-setup: ## Configure la base de données (Usage: make db-setup ENV=dev|local|prod|preprod)
 	@echo "Configuration de la base de données..."
 	@echo "Les migrations et seeders s'exécutent automatiquement via les services db-migrate et db-seed"
 
-db-migrate: ## Execute les migrations uniquement (Usage: make db-migrate ENV=dev|local|prod)
+db-migrate: ## Execute les migrations uniquement (Usage: make db-migrate ENV=dev|local|prod|preprod)
 	@echo "Exécution des migrations..."
 	@docker compose -f $(COMPOSE_FILE) run --rm db-migrate
 
-db-seed: ## Execute les seeders uniquement (Usage: make db-seed ENV=dev|local|prod)
+db-seed: ## Execute les seeders uniquement (Usage: make db-seed ENV=dev|local|prod|preprod)
 	@echo "Exécution des seeders..."
 	@docker compose -f $(COMPOSE_FILE) run --rm db-seed
 
-db-reset: ## Remet à zéro la base de données (Usage: make db-reset ENV=dev|local|prod)
+db-reset: ## Remet à zéro la base de données (Usage: make db-reset ENV=dev|local|prod|preprod)
 	@echo "Ceci va supprimer toutes les données de la base. Êtes-vous sûr? (y/N)"
 	@read -r response && [ "$$response" = "y" ] || exit 1
 	@echo "Suppression de la base de données..."
 	@docker compose -f $(COMPOSE_FILE) down
-	@docker volume rm aides-simplifiees-infra_dbdata || true
+	@if [ "$(ENV)" = "prod" ]; then \
+		docker volume rm aides-simplifiees-prod_dbdata_prod || true; \
+	elif [ "$(ENV)" = "preprod" ]; then \
+		docker volume rm aides-simplifiees-preprod_dbdata_preprod || true; \
+	elif [ "$(ENV)" = "local" ]; then \
+		docker volume rm aides-simplifiees-local_dbdata_local || true; \
+	else \
+		docker volume rm aides-simplifiees-infra_dbdata || true; \
+	fi
 	@docker compose -f $(COMPOSE_FILE) up -d db
 	@sleep 5
 	@$(MAKE) db-setup ENV=$(ENV)
 
-main-app-shell: ## Shell dans le container main-app (Usage: make main-app-shell ENV=dev|local|prod)
+main-app-shell: ## Shell dans le container main-app (Usage: make main-app-shell ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) exec main-app sh
 
-openfisca-shell: ## Shell dans le container openfisca (Usage: make openfisca-shell ENV=dev|local|prod)
+openfisca-shell: ## Shell dans le container openfisca (Usage: make openfisca-shell ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) exec openfisca bash
 
-leximpact-shell: ## Shell dans le container leximpact (Usage: make leximpact-shell ENV=dev|local|prod)
+leximpact-shell: ## Shell dans le container leximpact (Usage: make leximpact-shell ENV=dev|local|prod|preprod)
 	docker compose -f $(COMPOSE_FILE) exec leximpact sh
 
 # Base de données
-db-backup: ## Sauvegarde de la base de données (Usage: make db-backup ENV=dev|local|prod)
+db-backup: ## Sauvegarde de la base de données (Usage: make db-backup ENV=dev|local|prod|preprod)
 	@echo "Création d'une sauvegarde..."
-	docker compose -f $(COMPOSE_FILE) exec db pg_dump -U aides-simplifiees aides-simplifiees > backup_$$(date +%Y%m%d_%H%M%S).sql
+	@if [ "$(ENV)" = "prod" ]; then \
+		docker compose -f $(COMPOSE_FILE) exec db pg_dump -U aides-simplifiees aides-simplifiees-prod > database/backups_prod/backup_$$(date +%Y%m%d_%H%M%S).sql; \
+	elif [ "$(ENV)" = "preprod" ]; then \
+		docker compose -f $(COMPOSE_FILE) exec db pg_dump -U aides-simplifiees aides-simplifiees-preprod > database/backups_preprod/backup_$$(date +%Y%m%d_%H%M%S).sql; \
+	elif [ "$(ENV)" = "local" ]; then \
+		docker compose -f $(COMPOSE_FILE) exec db pg_dump -U aides-simplifiees aides-simplifiees-local > database/backups_local/backup_$$(date +%Y%m%d_%H%M%S).sql; \
+	else \
+		docker compose -f $(COMPOSE_FILE) exec db pg_dump -U aides-simplifiees aides-simplifiees > backup_$$(date +%Y%m%d_%H%M%S).sql; \
+	fi
 
-db-restore: ## Restaure la base de données (Usage: make db-restore BACKUP=filename.sql ENV=dev|local|prod)
+db-restore: ## Restaure la base de données (Usage: make db-restore BACKUP=filename.sql ENV=dev|local|prod|preprod)
 	@if [ -z "$(BACKUP)" ]; then \
-		echo "Usage: make db-restore BACKUP=filename.sql ENV=dev|local|prod"; \
+		echo "Usage: make db-restore BACKUP=filename.sql ENV=dev|local|prod|preprod"; \
 		exit 1; \
 	fi
-	docker compose -f $(COMPOSE_FILE) exec -T db psql -U aides-simplifiees -d aides-simplifiees < $(BACKUP)
+	@if [ "$(ENV)" = "prod" ]; then \
+		docker compose -f $(COMPOSE_FILE) exec -T db psql -U aides-simplifiees -d aides-simplifiees-prod < $(BACKUP); \
+	elif [ "$(ENV)" = "preprod" ]; then \
+		docker compose -f $(COMPOSE_FILE) exec -T db psql -U aides-simplifiees -d aides-simplifiees-preprod < $(BACKUP); \
+	elif [ "$(ENV)" = "local" ]; then \
+		docker compose -f $(COMPOSE_FILE) exec -T db psql -U aides-simplifiees -d aides-simplifiees-local < $(BACKUP); \
+	else \
+		docker compose -f $(COMPOSE_FILE) exec -T db psql -U aides-simplifiees -d aides-simplifiees < $(BACKUP); \
+	fi
 
 # Surveillance
-health: ## Vérifie l'état de santé des services (Usage: make health ENV=dev|local|prod)
+health: ## Vérifie l'état de santé des services (Usage: make health ENV=dev|local|prod|preprod)
 	@echo "Vérification de l'état des services:"
 	@docker compose -f $(COMPOSE_FILE) ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 
-health-check: ## Lance le script de vérification complète (Usage: make health-check ENV=dev|local|prod)
+health-check: ## Lance le script de vérification complète (Usage: make health-check ENV=dev|local|prod|preprod)
 	@chmod +x ./scripts/health-check.sh
 	@./scripts/health-check.sh
 

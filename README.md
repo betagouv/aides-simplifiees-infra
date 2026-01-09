@@ -1,190 +1,52 @@
 # aides simplifiées - Infrastructure
 
-Infrastructure Docker pour le produit [aides simplifiées](https://beta.gouv.fr/startups/droit-data-gouv-fr-simulateurs-de-droits.html)
+Infrastructure Docker pour le produit [aides simplifiées](https://beta.gouv.fr/startups/droit-data-gouv-fr-simulateurs-de-droits.html).
 
-## Architecture
+**[Documentation détaillée de l'architecture et des ports](./docs/architecture-overview.md)**
 
-- **Main app** : [aides-simplifiees-app](https://github.com/betagouv/aides-simplifiees-app) (AdonisJS) - Port 80 (dev), 8080 (prod)
-- **OpenFisca** : [aides-calculatrice-back](https://github.com/betagouv/aides-calculatrice-back) (calculs) - Port 5001 (dev), interne (prod)
-- **LexImpact** : [territoires](https://git.leximpact.dev/leximpact/territoires/territoires) (API autocomplétion communes) - Port 3000 (dev), interne (prod)
-- **PostgreSQL 17** : Base de données
-
-**[Documentation détaillée avec diagrammes](./docs/architecture-overview.md)** - Vue complète de l'architecture avec diagrammes Mermaid
-
-## Démarrage rapide
+## Démarrage rapide (Local)
 
 ```bash
-# 1. Cloner et configurer
+# 1. Configurer
 git clone https://github.com/betagouv/aides-simplifiees-infra.git
 cd aides-simplifiees-infra
 cp .env.template .env
+make generate-secrets  # Génère des secrets sécurisés
 
-# 2. Démarrer (développement)
-make dev # ou make local ou make prod
+# 2. Démarrer
+make dev      # Développement (hot-reload, debuggers, API exposées)
+# OU
+make local    # Production locale (sources montées)
 
-# 3. Vérifier le statut
+# 3. Vérifier
 make health
 ```
+Accès: http://localhost:8080 (App), http://localhost:5001 (OpenFisca), http://localhost:3000 (LexImpact)
 
-**Accès :**
+## Environnements Serveur
 
-**Tous les environnements :**
-- Application principale : http://localhost:8080
-- OpenFisca API : http://localhost:5001 (dev/local uniquement)
-- LexImpact API : http://localhost:3000 (dev/local uniquement)
-- Database : localhost:5432 (dev/local uniquement)
-- Debug Node.js : localhost:9229 (dev/local uniquement)
-- Debug Python : localhost:5678 (dev/local uniquement)
+| Env | Commande | Fichier Env | Port | Description |
+|-----|----------|-------------|------|-------------|
+| **Prod** | `make prod` | `.env.prod` | 8080 | Instance de production officielle |
+| **Preprod** | `make preprod` | `.env.preprod` | 8081 | Instance de recette / staging |
 
-**Notes par environnement:**
-- **dev**: NODE_ENV=development, build target=development
-- **local**: NODE_ENV=production, volumes montés, debugging activé
-- **prod**: Services internes uniquement, pas de ports de debug
+> Les environnements serveur utilisent des bases de données et des volumes distincts (`_prod` et `_preprod`) pour garantir une isolation totale.
 
-> **Note:** Static files (assets, images, etc.) are now served directly by the AdonisJS application. The internal nginx proxy has been removed to simplify the architecture. SSL termination and advanced routing should be handled by external infrastructure.
+## Commandes utiles
 
-## Configuration
+| Action | Commande |
+|--------|----------|
+| **Logs** | `make logs`, `make main-app-logs`, `make db-logs` |
+| **Base de données** | `make db-shell ENV=prod|preprod|dev` (SQL shell) |
+| **Backup** | `make db-backup ENV=prod|preprod` (dans `database/backups_<env>`) |
+| **Aide** | `make help` (Liste toutes les commandes) |
 
-Les variables d'environnement sont gérées via le fichier `.env`.
+## Déploiement
 
-### Génération de secrets sécurisés
-```bash
-make generate-secrets   # Génère des valeurs sécurisées à copier dans .env
-```
+1. Sur le serveur, cloner le repo.
+2. Créer `.env.prod` et `.env.preprod` à partir de `.env.template`.
+3. Générer des secrets uniques pour chaque environnement : `make generate-secrets`.
+4. Configurer les variables spécifiques (URLs, Matomo).
+5. Lancer : `make prod` et/ou `make preprod`.
 
-### Variables importantes dans .env
-- `DB_PASSWORD` : Mot de passe PostgreSQL
-- `ADMIN_PASSWORD` : Compte admin initial AdonisJS  
-- `APP_KEY` : Clé de chiffrement AdonisJS (32 caractères)
-- `MONITORING_SECRET` : Secret pour les health checks
-- `MAIN_APP_TAG`, `OPENFISCA_TAG`, `LEXIMPACT_TAG` : Versions des images Docker (production)
-
-## Développement
-
-### Commandes essentielles
-```bash
-make help               # Liste toutes les commandes
-make dev               # Démarre en mode développement
-make prod              # Démarre en mode production
-make logs              # Affiche les logs
-make health            # Statut des services
-make health-check      # Vérification complète de santé
-make down              # Arrête les services
-make clean             # Nettoyage complet
-```
-
-### Logs par service
-```bash
-make main-app-logs     # Logs de l'application
-make openfisca-logs    # Logs OpenFisca
-make leximpact-logs    # Logs LexImpact
-make db-logs           # Logs PostgreSQL
-```
-
-### Base de données
-```bash
-make db-migrate        # Exécute les migrations
-make db-seed           # Exécute les seeders
-make db-backup         # Sauvegarde
-make db-shell          # Shell PostgreSQL
-```
-
-### Exemple de configuration (.env)
-```bash
-# Application
-NODE_ENV=production
-ADMIN_LOGIN=admin@beta.gouv.fr
-APP_KEY=your-32-character-app-key-here
-
-# Database
-DB_PASSWORD=your-secure-database-password-here
-
-# Monitoring
-MONITORING_SECRET=your-monitoring-secret-here
-
-# Images Docker (production)
-MAIN_APP_TAG=latest
-OPENFISCA_TAG=latest
-LEXIMPACT_TAG=latest
-```
-
-### Développement local
-Pour développer avec les sources locales :
-```bash
-make local-setup              # Clone tous les dépôts adjacents
-```
-
-**Structure attendue (développement) :**
-```
-parent-directory/
-├── aides-simplifiees-infra/     (ce projet)
-├── territoires/                 (LexImpact - requis pour dev/local)
-├── aides-simplifiees-app/       (optionnel)
-└── aides-calculatrice-back/     (optionnel)
-```
-
-### Déploiement en production
-
-#### Étapes de déploiement production :
-
-1. **Configuration simple (recommandée)**
-   ```bash
-   # Cloner uniquement ce repository
-   git clone https://github.com/betagouv/aides-simplifiees-infra.git
-   cd aides-simplifiees-infra
-   cp .env.template .env
-   # Éditer .env avec vos valeurs de production
-   make prod
-   ```
-   
-   La production utilise automatiquement l'image pré-compilée `ghcr.io/betagouv/leximpact-territoires:latest`.
-
-2. **Build personnalisé (optionnel)**
-   
-   Si vous souhaitez construire l'image LexImpact localement :
-   ```bash
-   # Cloner les repositories requis
-   git clone https://github.com/betagouv/aides-simplifiees-infra.git
-   git clone https://git.leximpact.dev/leximpact/territoires/territoires.git
-   cd aides-simplifiees-infra
-   make build-leximpact-image  # Build local
-   make prod
-   ```
-
-3. **Publication d'image (développeurs seulement)** :
-   ```bash
-   # Construire et publier l'image depuis ce repository
-   make build-leximpact-image    # Construit l'image localement
-   make push-leximpact-image     # Construit et publie sur ghcr.io
-   ```
-   
-   La production utilise automatiquement l'image pré-compilée `ghcr.io/betagouv/leximpact-territoires:latest`
-
-## Dépannage
-
-### Problèmes fréquents
-```bash
-# Variables d'environnement manquantes
-cp .env.template .env && make generate-secrets
-
-# Ports occupés (développement/local)
-lsof -i :8080 :3000 :5001 :5432 :9229 :5678
-
-# Ports occupés (production)  
-lsof -i :8080
-
-# Nettoyer Docker
-make clean && docker system prune -a
-
-# Base corrompue
-make down && docker volume rm aides-simplifiees-infra_dbdata && make up
-
-# Vérifier la configuration
-make health-check
-```
-
-## Support
-
-- [Issues GitHub](https://github.com/betagouv/aides-simplifiees-infra/issues)
-- [aides-simplifiees-app](https://github.com/betagouv/aides-simplifiees-app)
-- [aides-calculatrice-back](https://github.com/betagouv/aides-calculatrice-back)
+Voir [docs/architecture-overview.md](./docs/architecture-overview.md) pour les détails techniques.

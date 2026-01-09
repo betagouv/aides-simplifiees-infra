@@ -1,4 +1,13 @@
+name: aides-simplifiees-local
+
+volumes:
+  dbdata_local:
+    driver: local
+  app_logs_local:
+    driver: local
+
 services:
+
   main-app:
     build:
       context: ../aides-simplifiees-app
@@ -9,10 +18,12 @@ services:
       NODE_ENV: production
       LOG_LEVEL: debug
       SESSION_DRIVER: memory
+      DB_DATABASE: aides-simplifiees-local
     volumes:
       - ../aides-simplifiees-app:/app
       - /app/node_modules  # Preserve node_modules in container
       - /app/build        # Preserve build directory
+      - app_logs_local:/app/logs
     ports:
       - "8080:3333" # Expose main app on port 8080 for consistency
       - "9229:9229"  # Node.js debugging port
@@ -42,6 +53,11 @@ services:
       - "3000:3000"  # Expose LexImpact API directly for local access
 
   db:
+    environment:
+      POSTGRES_DB: aides-simplifiees-local
+    volumes: !override
+      - dbdata_local:/var/lib/postgresql/data
+      - ./database/backups_local:/backups
     ports:
       # Expose Postgres port directly for local access
       - "5432:5432"
@@ -52,9 +68,13 @@ services:
       dockerfile: Dockerfile
       target: production
     image: aides-simplifiees-app:local  # Override with local build tag
+    environment:
+      DB_DATABASE: aides-simplifiees-local
   db-seed:
     build:
       context: ../aides-simplifiees-app
       dockerfile: Dockerfile
       target: production
     image: aides-simplifiees-app:local  # Override with local build tag
+    environment:
+      DB_DATABASE: aides-simplifiees-local

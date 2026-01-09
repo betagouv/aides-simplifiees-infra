@@ -4,17 +4,18 @@
 
 ### Environnements et ports
 
-| Service | Développement (dev) | Local (local) | Production (prod) |
-|---------|---------------------|---------------|-------------------|
-| main-app | 8080:3333, 9229:9229 | 8080:3333, 9229:9229 | 8080:3333 |
-| openfisca | 5001:5000, 5678:5678 | 5001:5000, 5678:5678 | Interne seulement |
-| leximpact | 3000:3000 | 3000:3000 | Interne seulement |
-| database | 5432:5432 | 5432:5432 | Interne seulement |
+| Service | Développement (dev) | Local (local) | Préproduction (preprod) | Production (prod) |
+|---------|---------------------|---------------|-------------------------|-------------------|
+| main-app | 8080:3333 <br/>(Debug: 9229) | 8080:3333 <br/>(Debug: 9229) | 8081:3333 | 8080:3333 |
+| openfisca | 5001:5000 <br/>(Debug: 5678) | 5001:5000 <br/>(Debug: 5678) | Interne | Interne |
+| leximpact | 3000:3000 | 3000:3000 | Interne | Interne |
+| database | 5432:5432 | 5432:5432 | Interne | Interne |
 
 **Différences clés:**
-- **dev**: NODE_ENV=development, build target=development, commandes ace directes
-- **local**: NODE_ENV=production, build target=production, volumes montés, debug ports
-- **prod**: Images pré-construites, pas de ports debug, sécurité renforcée
+- **dev**: `NODE_ENV=development`, hot-reload, debugger actif.
+- **local**: `NODE_ENV=production`, setup iso-prod mais avec sources montées.
+- **preprod**: Serveur, `APP_ENV=staging`, base de données séparée, port 8081.
+- **prod**: Serveur, `APP_ENV=production`, base de données séparée, port 8080.
 
 ### Diagramme d'architecture
 
@@ -22,7 +23,7 @@
 graph TB
     subgraph "Infrastructure Docker"
         subgraph "Application Layer"
-            main[main-app<br/>AdonisJS<br/>Port 8080:3333 all envs<br/>Serves Static Files]
+            main["main-app<br/>AdonisJS<br/>Port 8080 (Prod)/8081 (Preprod)<br/>Serves Static Files"]
             openfisca[openfisca<br/>Calculateur<br/>Port 5001:5000 dev/local<br/>Internal only prod]
             leximpact[leximpact<br/>LexImpact Territoires<br/>Port 3000 dev/local<br/>Internal only prod]
         end
@@ -60,16 +61,6 @@ graph TB
     db -.->|Persist| dbdata
     main -.->|Logs| logs
     backup -.->|Backup Files| backups
-    
-    classDef app fill:#f3e5f5
-    classDef data fill:#e8f5e8
-    classDef storage fill:#fff3e0
-    classDef external fill:#ffebee
-    
-    class main,openfisca,leximpact app
-    class db,migrate,seed,backup data
-    class dbdata,logs,backups storage
-    class users,extproxy external
 ```
 
 ## 2. Flux de données et communication

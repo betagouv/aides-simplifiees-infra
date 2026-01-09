@@ -74,3 +74,7 @@ secrets/
 *.backup
 
 .env
+.env.preprod
+.env.prod
+
+backups
